@@ -1,0 +1,747 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Creates a server or set of servers with Quin-C and related application installed and configured to work together
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+    Default: 'dev'
+  S3BucketName:
+    Type: String
+    Description: Name of your existing S3 Bucket
+    Default: ad-build
+  SecurityGroupId:
+    Type: String
+    Description: Desired Security Group for the EC2 instance
+    Default: sg-0c89c15d42d1bf602
+  InstanceSize:
+    Type: String
+    Description: Instance type for the node (such as t2.micro)
+    Default: r5.xlarge
+    AllowedValues:
+    - c5d.xlarge
+    - c5d.2xlarge
+    - c5d.4xlarge
+    - m5.large
+    - m5.xlarge
+    - m5.2xlarge
+    - m5.4xlarge
+    - r5.xlarge
+    - r5.2xlarge
+    - r5.4xlarge
+    - c5.xlarge
+    - c5.2xlarge
+    - c5.4xlarge
+  BuildNumber:
+    Type: String
+    Description: The number/version of the build to download to the node
+    Default: '7.3.0.462'
+  WindowsInstallationPath:
+    Type: String
+    Default: C:\temp\ALL_Suite\x64\
+  QuincInstallerPath:
+    Type: String
+    Default: '{BFDD2D86-12F9-41AE-9D8A-260A59C66C71}'
+  DPEInstallerPath:
+    Type: String
+    Default: '{1F0B9032-5C06-4032-91AB-BB51EF44E34C}'
+  CollabInstallerPath:
+    Type: String
+    Default: 'Optional-Collab-{46F1BF728158}'
+  DPMInstallerPath:
+    Type: String
+    Default: 'DPM-x64'
+  CucumberTags:
+    Default: '@BAT'
+    Type: String
+    AllowedValues: ['@Login', '@P1', '@Extended', '@BAT']
+  DeploymentType:
+    Type: String
+    Default: AllInOne
+    AllowedValues: [AllInOne, Distributed]
+    Description: Specify whether this will be a AllInOne or Distributed deployment 
+  DBType:
+    Type: String
+    AllowedValues: [SQLServer2016, SQLServer2017, Postgres]
+    Default: Postgres
+  
+Metadata: 
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - 
+        Label: 
+          default: "Required Parameters"
+        Parameters: 
+          - BuildNumber
+          - CucumberTags
+          - DBType
+          - DeploymentType
+      - 
+        Label: 
+          default: "Optional Overrides"
+        Parameters: 
+          - InstanceSize
+          - S3BucketName
+          - SecurityGroupId
+      - 
+        Label: 
+          default: "FTK Installer Paths:"
+        Parameters:
+          - QuincInstallerPath
+          - DPEInstallerPath
+          - CollabInstallerPath
+          - DPMInstallerPath
+
+Mappings: 
+  AccountMap:
+    # QBlaze
+    '092977961724':
+      SubnetId: subnet-0e47b7c9d8daafd24
+      SecurityGroupId: sg-0c89c15d42d1bf602
+      DomainJoinSSMDocument: awsconfig_Domain_d-90677616df_qbprod.accessdata.local
+      AmiId: ami-0c3eaa6f380c57aa6
+
+    #Development
+    '686428625652':
+      SubnetId: subnet-0fd8d10816f76e8df
+      SecurityGroupId: sg-054ee7d6f4fb62d7a
+      DomainJoinSSMDocument: awsconfig_Domain_d-9067197e04_addev.accessdatagroup.net
+      AmiId: ami-0c3eaa6f380c57aa6
+
+  DBType: 
+    SQLServer2016: 
+      dbtype: SQLServer
+      sysuser: '{{resolve:ssm:qa-sql-server-user:1}}'
+      syspass: '{{resolve:ssm:qa-sql-server-password:1}}'
+      port: 1433
+    SQLServer2017: 
+      dbtype: SQLServer
+      sysuser: '{{resolve:ssm:qa-sql-server-user:1}}'
+      syspass: '{{resolve:ssm:qa-sql-server-password:1}}'
+      port: 1433
+    Postgres: 
+      dbtype: Postgres
+      sysuser: '{{resolve:ssm:qa-postgres-user:1}}'
+      syspass: '{{resolve:ssm:qa-postgres-password:1}}'
+      port: 5432
+  AMIID:
+    SQLServer2016:
+      ami: ami-015224783cde445c0
+    SQLServer2017:
+      ami: ami-069116ad1ed86ea87
+    Postgres:
+      ami: ami-0c3eaa6f380c57aa6
+
+Conditions:
+  AllInOne: !Equals [!Ref DeploymentType, AllInOne]
+  Distributed: !Equals [!Ref DeploymentType, Distributed]
+Resources:
+  CoreInstance:
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Authentication:
+        S3AccessCreds:
+          type: S3
+          roleName: ADJoiner
+          buckets:
+            - !Sub ${S3BucketName}
+            - ad-qaevidence
+      AWS::CloudFormation::Init:
+        domain-join:
+          files:
+            C:\temp\domain-join.ps1:
+              content: !Sub
+                - |
+                  Set-DefaultAWSRegion -Region ${AWS::Region}
+                  Set-Variable -name instance_id -value (Invoke-Restmethod -uri http://169.254.169.254/latest/meta-data/instance-id)
+                  New-SSMAssociation -InstanceId $instance_id -Name "${SSMDocument}"
+                - {SSMDocument: !FindInMap [AccountMap, !Ref 'AWS::AccountId', DomainJoinSSMDocument]}
+                # Restart-Computer -Force           
+          commands:
+            00-domain-join:
+              test: powershell -Command "ls C:\\temp\\domain-join.ps1"
+              command: powershell -ExecutionPolicy ByPass -File domain-join.ps1
+              cwd: 'C:\temp\'
+              waitAfterCompletion: 120
+        qa:
+          files:
+            C:\temp\ChromeSetup.exe:
+              source: !Sub https://${S3BucketName}.s3.amazonaws.com/quinc/QA+Folder/ChromeSetup.exe
+            C:\temp\QuinCCucumber.zip:
+              source: !Sub https://${S3BucketName}.s3.amazonaws.com/quinc/QA+Folder/QuinCCucumber.zip
+            C:\temp\install-chrome.ps1:
+              content: Start-Process -FilePath C:\temp\ChromeSetup.exe -Args "/silent /install" -Verb RunAs -Wait;
+            C:\temp\install-cucumber.ps1:
+              content: |
+                Expand-Archive -path 'C:\temp\QuinCCucumber.zip' -destinationpath "C:\"
+                New-Item -ItemType directory -Path C:\Projects
+                New-Item -ItemType directory -Path C:\ExportDataPath
+                New-Item -ItemType directory -Path C:\DataTransferPath
+            C:\temp\update-npm-packages.ps1:
+              content: |
+                npm install chai chai-url chai-string chai-as-promised chai-fs chai-files chai-arrays chai-sorted
+                npm install exceljs pdf-parse downloads-folder mammoth
+                npm install -g typescript protractor protractor-helper
+                npm install webdriver-manager
+                npm install --save write-yaml
+                npm install --save-dev html-dnd
+                npm audit fix
+            C:\temp\start-testing.ps1:
+              content: !Sub |
+                Restart-Service -Name QuincSelfHostService
+                Start-Sleep -Seconds 10          
+                cd C:\QuinCCucumber\
+                node "C:\QuinCCucumber\node_modules\webdriver-manager\bin\webdriver-manager" update
+                node "C:\QuinCCucumber\node_modules\webdriver-manager\bin\webdriver-manager" start --detach
+                node "C:\QuinCCucumber\node_modules\protractor\bin\protractor" config.js --cucumberOpts.tags='${CucumberTags}' >> 'c:\cfn\log\testing.log'
+                Write-Output "Uploading report to S3..." >> 'c:\cfn\log\testing.log'
+                Write-S3Object -BucketName ${S3BucketName} -Key "/BuildOutput/${BuildNumber}/cucumber_reporter.html" -File C:\QuinCCucumber\reports\html\cucumber_reporter.html
+                # C:\QuinCCucumber\reports\html\cucumber_reporter.html
+            C:\temp\update-config-file.ps1:
+              content: '(((Get-Content -path C:\QuinCCucumber\Test\testData\configurations.yml -Raw) -replace "(http:\/\/)(.*?)\:","http://$env:COMPUTERNAME`:")  | Set-Content -path C:\QuinCCucumber\Test\testData\configurations.yml)'
+          commands:
+            01-install-chrome:
+              test: powershell -Command "ls C:\temp\ChromeSetup.exe"
+              command: powershell -ExecutionPolicy ByPass -File install-chrome.ps1
+              cwd: 'C:\temp\'
+              waitAfterCompletion: 30
+            02-install-cucumber:
+              test: powershell -Command "ls C:\temp\QuinCCucumber.zip"
+              command: powershell -ExecutionPolicy ByPass -File install-cucumber.ps1
+              waitAfterCompletion: 0
+              cwd: 'C:\temp\'
+            03-update-npm-packages:
+              test: powershell -Command "ls C:\\QuinCCucumber"
+              command: powershell -ExecutionPolicy ByPass -File C:\temp\update-npm-packages.ps1
+              cwd: 'C:\QuinCCucumber\'
+              waitAfterCompletion: 0
+            04-update-config:
+              command: powershell -ExecutionPolicy ByPass -File update-config-file.ps1
+              cwd: 'C:\temp\'
+              waitAfterCompletion: 0            
+        quinc:
+          files:
+            C:\temp\install-quinc.ps1:
+              # If everything is being installed on the same machine, then we can use DBCONFIG="SIMPLE" to set up the database on the local machine, otherwise 
+              # DBConfig.exe must be used to initialize the database on a remote database server
+              content: !Sub |
+                  Read-S3Object -BucketName ${S3BucketName} -KeyPrefix 'FTK/FTK-${BuildNumber}/${QuincInstallerPath}' -Folder '${WindowsInstallationPath}\${QuincInstallerPath}'
+                  cmd /c "${WindowsInstallationPath}\${QuincInstallerPath}\AccessData_Forensic_Tools.exe" /clone_wait /s /v"/qn REBOOT=R PRODUCTTOINSTALL="QUINC" USELOCALSYSTEM=0 /L*V "c:\cfn\log\quinc.log""
+                  netsh advfirewall firewall add rule name="AD-Open Web SSL port 443" dir=in action=allow protocol=TCP localport=443 remoteport=any
+                  netsh advfirewall firewall add rule name="AD-Open TensorFlow in port 5000" dir=in action=allow protocol=TCP localport=5000 remoteport=any
+                # - {DatabaseConfig: !If [AllInOne, DBCONFIG="SIMPLE", ""]}
+          commands:
+            01-install-quinc:
+              test: powershell -Command "ls ${WindowsInstallationPath}\${QuincInstallerPath}"
+              command: powershell -ExecutionPolicy ByPass -File install-quinc.ps1
+              waitAfterCompletion: 60
+              cwd: 'C:\temp\'
+        dpm:
+          files:
+            C:\temp\install-dpm.ps1:
+              content: !Sub |
+                $password = (Get-SSMParameterValue -Name qa-windows-admin-password -WithDecryption $True).Parameters[0].Value
+                Read-S3Object -BucketName '${S3BucketName}' -KeyPrefix 'FTK/FTK-${BuildNumber}\${DPMInstallerPath}' -Folder '${WindowsInstallationPath}\${DPMInstallerPath}'
+                msiexec /log "c:\cfn\log\dpm.log" /i '${WindowsInstallationPath}\${DPMInstallerPath}\AccessData_Distributed_Processing_Manager_(64-bit).msi'  /qn SERVICEUSER=ADMINISTRATOR SERVICEDOMAIN=$env:COMPUTERNAME SERVICEPASS=$password
+            C:\temp\run-dpm-as-ediscovery.ps1:
+              content: |
+                $user = (Get-SSMParameterValue -Name windows-service-account-user -WithDecryption $True).Parameters[0].Value
+                $password = (Get-SSMParameterValue -Name windows-service-account-password -WithDecryption $True).Parameters[0].Value
+                cmd /c sc config "ADProcessingManager" obj= "$user" password= "$password"
+                Start-Sleep -Seconds 10
+                Start-Service -Name ADProcessingManager
+          commands:
+            01-install-dpm:
+              command: powershell -ExecutionPolicy ByPass -File install-dpm.ps1
+              cwd: 'C:\temp\'
+              waitAfterCompletion: 0
+            02-set-service-domain-user:
+              command: powershell -ExecutionPolicy ByPass -File run-dpm-as-ediscovery.ps1
+              cwd: 'C:\temp\'
+              waitAfterCompletion: 0              
+        dpe:
+          files:
+            C:\temp\install-dpe.ps1:
+              content: 
+                Fn::Sub:
+                  - |
+                    Read-S3Object -BucketName '${S3BucketName}' -KeyPrefix 'FTK/FTK-${BuildNumber}\${DPEInstallerPath}' -Folder '${WindowsInstallationPath}\${DPEInstallerPath}'
+                    $user = (Get-SSMParameterValue -Name windows-service-account-user -WithDecryption $True).Parameters[0].Value
+                    $password = (Get-SSMParameterValue -Name windows-service-account-password -WithDecryption $True).Parameters[0].Value
+                    $localadminpassword = (Get-SSMParameterValue -Name qa-windows-admin-password -WithDecryption $True).Parameters[0].Value
+                    cmd /c "${WindowsInstallationPath}\${DPEInstallerPath}\AccessData_Evidence_Processing_Engine_^(64-bit^).exe" /clone_wait /s /v"/qn ${DistributedFlag} SERVICEUSER=Administrator SERVICEDOMAIN=$env:COMPUTERNAME SERVICEPASS=$localadminpassword REBOOT=R /L*V "c:\cfn\log\dpe.log""
+                    cmd /c sc config "ADProcessingEngine" obj= "$user" password= "$password"
+                  - {DistributedFlag: !If [Distributed, DISTRIBUTED=1, ""]} 
+          commands:
+            01-install-dpe:
+              command: powershell -ExecutionPolicy ByPass -File install-dpe.ps1
+              cwd: 'C:\temp\'
+              waitAfterCompletion: 0
+            02-validate-dpe-install:
+              command: powershell -Command "ls 'C:\\Program Files\\AccessData\\Evidence Processing Engine'"
+              waitAfterCompletion: 0
+        collab:
+          files:
+            C:\temp\install-collab.ps1:
+              content: !Sub |
+                Read-S3Object -BucketName '${S3BucketName}' -KeyPrefix 'FTK/FTK-${BuildNumber}\${CollabInstallerPath}' -Folder '${WindowsInstallationPath}\${CollabInstallerPath}'
+                cmd /c "${WindowsInstallationPath}\${CollabInstallerPath}\AccessData_Collab_^(64-bit^).exe" /clone_wait /s /v"/qn AgreeToLicense=Yes REBOOT=R /L*V "c:\cfn\log\collab.log""
+              # C:\temp\ALL_Suite\x64\Optional-Collab-{46F1BF728158}\AccessData_Collab_(64-bit).exe'
+          commands:
+            01-install-collab:
+              command: powershell -ExecutionPolicy ByPass -File install-collab.ps1
+              waitAfterCompletion: 60
+              cwd: 'C:\temp\'
+            02-reboot:
+              command: powershell.exe -Command 'Restart-Computer'
+              waitAfterCompletion: 120
+        cloudwatch:
+          files:
+            C:\temp\reset-windows-admin-password-from-ssm.ps1:
+              content: |
+                $password = (Get-SSMParameterValue -Name qa-windows-admin-password -WithDecryption $True).Parameters[0].Value
+                net user administrator $password
+            C:\ProgramData\Amazon\AmazonCloudWatchAgent\amazon-cloudwatch-agent.json:
+              content: !Sub |
+                {
+                    "logs": {
+                        "logs_collected": {
+                            "files": {
+                                "collect_list": [{
+                                        "file_path": "C:\\cfn\\log\\cfn-init-cmd.log",
+                                        "log_group_name": "server-bootstrap",
+                                        "log_stream_name": "${BuildNumber}\\${AWS::StackName}\\{instance_id}\\cfn-init-cmd.log"
+                                    },
+                                    {
+                                        "file_path": "C:\\cfn\\log\\cfn-init.log",
+                                        "log_group_name": "server-bootstrap",
+                                        "log_stream_name": "${BuildNumber}\\${AWS::StackName}\\{instance_id}\\cfn-init.log"
+                                    },
+                                    {
+                                        "file_path": "C:\\cfn\\log\\testing.log",
+                                        "log_group_name": "server-bootstrap",
+                                        "log_stream_name": "${BuildNumber}\\${AWS::StackName}\\{instance_id}\\testing.log"
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+          commands:
+            00-stop-service:
+              command: powershell -Command "C:\\'Program Files'\\Amazon\\AmazonCloudWatchAgent\\amazon-cloudwatch-agent-ctl.ps1 -a stop"
+              waitAfterCompletion: 10
+            01-start-service:
+              command: powershell -Command "C:\\'Program Files'\\Amazon\\AmazonCloudWatchAgent\\amazon-cloudwatch-agent-ctl.ps1 -a fetch-config -m ec2 -c file:C:\\ProgramData\\Amazon\\AmazonCloudWatchAgent\\amazon-cloudwatch-agent.json -s"
+              waitAfterCompletion: 10
+            02-reset-admin-password:
+              command: powershell -ExecutionPolicy ByPass -File reset-windows-admin-password-from-ssm.ps1
+              cwd: C:\Temp\
+              waitAfterCompletion: 0
+        reboot:
+          commands:
+            00-reboot:
+              command: powershell.exe -Command 'Restart-Computer'
+              waitAfterCompletion: 120
+            # 01-cfn-signal:
+            #   command: !Sub cfn-signal.exe --exit-code %ERRORLEVEL% --stack ${AWS::StackName} --resource ApplicationInstance --region ${AWS::Region}
+            #   waitAfterCompletion: 0
+        configSets:
+          AllInOne:
+            - "cloudwatch"
+            - "domain-join"
+            # - "download"
+            - "dpe"
+            - "dpm"
+            - "quinc"
+            - "collab"
+            - "qa"
+            - "reboot"
+          DomainJoin:
+            - "domain-join"
+            - "reboot"
+          QA: 
+            - "qa"
+          QuinC:
+            - "cloudwatch"
+            - "domain-join"
+            # - "download"
+            - "quinc"
+            - "reboot"
+          DPM:
+            # - "cloudwatch"
+            - "dpm"
+          DPE:
+            - "cloudwatch"
+            - "domain-join"
+            # - "download"
+            - "dpe"
+            - "reboot"
+          Database:
+            - "cloudwatch"
+            - "domain-join"
+          Collab:
+            - "cloudwatch"
+            - "domain-join"
+            # - "download"
+            - "collab"
+            - "reboot"
+          default:
+            -
+              ConfigSet: "AllInOne"
+    Properties:
+      UserData:
+        Fn::Base64: 
+          Fn::Sub: 
+            - |
+              <powershell>          
+              # Restart-Service AmazonSSMAgent
+              mkdir C:\Downloads\Amazon\AmazonCloudWatchAgent
+              powershell -Command "(New-Object Net.WebClient).DownloadFile('https://s3.amazonaws.com/amazoncloudwatch-agent/windows/amd64/latest/amazon-cloudwatch-agent.msi','C:\Downloads\Amazon\AmazonCloudWatchAgent\amazon-cloudwatch-agent.msi')"
+              C:\Downloads\Amazon\AmazonCloudWatchAgent\amazon-cloudwatch-agent.msi
+              Start-Sleep -Seconds 10
+              cfn-init.exe --stack ${AWS::StackName} --resource CoreInstance --region ${AWS::Region} --configsets ${ConfigSet} --verbose
+              cfn-signal.exe --exit-code $LASTEXITCODE --stack ${AWS::StackName} --resource CoreInstance --region ${AWS::Region}
+              </powershell>
+            - {ConfigSet: !If [Distributed, "QuinC,DPM", "AllInOne"]}
+      ImageId: !FindInMap [AccountMap, !Ref 'AWS::AccountId', AmiId]
+      # ImageId: !FindInMap [AMIID, !Ref DBType, ami]
+      IamInstanceProfile: ADJoiner
+      InstanceType: !Ref InstanceSize
+      Tags:
+        - Key: Name
+          Value: !Join ['-',[!Ref 'AWS::StackName', !If [Distributed, "Database", "AllInOne"]]]
+        - Key: Owner
+          Value: 1strategy
+        - Key: Component
+          Value: !If [Distributed, "Database", "AllInOne"]
+      # SecurityGroupIds:
+      #   - !FindInMap [AccountMap, !Ref 'AWS::AccountId', SecurityGroupId]
+      # SubnetId: !FindInMap [AccountMap, !Ref 'AWS::AccountId', SubnetId]
+      NetworkInterfaces: 
+      - AssociatePublicIpAddress: "true"
+        DeviceIndex: "0"
+        GroupSet: 
+          - !FindInMap [AccountMap, !Ref 'AWS::AccountId', SecurityGroupId]
+        SubnetId: !FindInMap [AccountMap, !Ref 'AWS::AccountId', SubnetId]
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 200
+    CreationPolicy:
+      ResourceSignal:    
+        Timeout: PT60M
+
+  # This is antithetical to a security best practices, and while it is in-line with existing practices it 
+  # needs to be addressed and tightened.
+  DisableWindowsFirewallOnDatabaseServer:
+    Condition: Distributed
+    Type: AWS::SSM::Association
+    Properties: 
+      Targets:
+      - Key: InstanceIds
+        Values:
+          - !Ref CoreInstance
+      Name: AWS-RunPowerShellScript
+      Parameters: 
+        commands: 
+            - netsh advfirewall set allprofiles state off
+
+  QuinCInstance:
+    Condition: Distributed
+    Type: AWS::EC2::Instance
+    Properties:
+      UserData:
+        Fn::Base64: !Sub |
+          <powershell>
+          mkdir C:\Downloads\Amazon\AmazonCloudWatchAgent
+          powershell -Command "(New-Object Net.WebClient).DownloadFile('https://s3.amazonaws.com/amazoncloudwatch-agent/windows/amd64/latest/amazon-cloudwatch-agent.msi','C:\Downloads\Amazon\AmazonCloudWatchAgent\amazon-cloudwatch-agent.msi')"
+          C:\Downloads\Amazon\AmazonCloudWatchAgent\amazon-cloudwatch-agent.msi
+          Start-Sleep -Seconds 10
+          cfn-init.exe --stack ${AWS::StackName} --resource CoreInstance --region ${AWS::Region} --configsets QuinC,DPM --verbose
+          cfn-signal.exe --exit-code $LASTEXITCODE --stack ${AWS::StackName} --resource QuinCInstance --region ${AWS::Region}
+          </powershell>
+      ImageId: !FindInMap [AccountMap, !Ref 'AWS::AccountId', AmiId]
+      # ImageId: !FindInMap [AMIID, !Ref DBType, ami]
+      IamInstanceProfile: ADJoiner
+      InstanceType: !Ref InstanceSize
+      Tags:
+        - Key: Name
+          Value: !Join ["-",[!Ref 'AWS::StackName', "QuinC"]]
+        - Key: Owner
+          Value: 1strategy
+        - Key: Component
+          Value: QuinC
+      # SubnetId: !FindInMap [AccountMap, !Ref 'AWS::AccountId', SubnetId]
+      # SecurityGroupIds:
+      #   - !FindInMap [AccountMap, !Ref 'AWS::AccountId', SecurityGroupId]
+      NetworkInterfaces: 
+      - AssociatePublicIpAddress: "true"
+        DeviceIndex: "0"
+        GroupSet: 
+          - !FindInMap [AccountMap, !Ref 'AWS::AccountId', SecurityGroupId]
+        SubnetId: !FindInMap [AccountMap, !Ref 'AWS::AccountId', SubnetId]
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 200
+    CreationPolicy:
+      ResourceSignal:    
+        Timeout: PT60M
+
+  UpdateQuinCDatabaseConfig:
+    Condition: Distributed
+    Type: AWS::SSM::Association
+    Properties: 
+      Targets:
+      - Key: InstanceIds
+        Values:
+          - !Ref QuinCInstance
+      Name: AWS-RunPowerShellScript
+      Parameters: 
+        commands: 
+        - Stop-Service -Name QuincSelfHostService
+        - !Sub 'Read-S3Object -BucketName adg-qb-configstore -Key "${Environment}/ADG.WeblabSelfHost.exe.config" -File "C:\Program Files\AccessData\Forensic Tools\7.3\bin\ADG.WeblabSelfHost.exe.config"'
+        - !Sub '(((Get-Content -path "C:\Program Files\AccessData\Forensic Tools\7.3\bin\ADG.WeblabSelfHost.exe.config" -Raw) -replace "<add key=`"host`" value=`"us-east-appprod1.accessdata.cloud`" />","<add key=`"host`" value=`"${AWS::StackName}.${Environment}.qblaze.accessdata.cloud`" />")  | Set-Content -path "C:\Program Files\AccessData\Forensic Tools\7.3\bin\ADG.WeblabSelfHost.exe.config")'
+        - !Sub '(((Get-Content -path "C:\Program Files\AccessData\Forensic Tools\7.3\bin\ADG.WeblabSelfHost.exe.config" -Raw) -replace "<add key=`"JobMasterLink`" value=`"https://us-east-appprod1.accessdata.cloud`" />","<add key=`"JobMasterLink`" value=`"https://${AWS::StackName}.${Environment}.qblaze.accessdata.cloud`" />")  | Set-Content -path "C:\Program Files\AccessData\Forensic Tools\7.3\bin\ADG.WeblabSelfHost.exe.config")'
+        - !Sub 'Read-S3Object -BucketName adg-qb-configstore -Key "${Environment}/DatabaseConfig.xml" -File "C:\ProgramData\AccessData\Shared\DatabaseConfig.xml"'
+        - !Sub 'Read-S3Object -BucketName adg-qb-configstore -Key "${Environment}/accessdata_dot_cloud.pfx" -File "C:\Program Files\AccessData\aaa-ssl-aaa\accessdata_dot_cloud.pfx"'
+        - Restart-Service -Name QuincSelfHostService
+        - Restart-Service -Name ADProcessingManager
+        # <add key="host" value="us-east-appprod1.accessdata.cloud" />
+        # - $webconfig=GET-SECSecretValue -secretid adgwebselfhostconfig
+        # - echo $webconfig.SecretString > 'C:\Program Files\AccessData\Forensic Tools\7.3\bin\ADG.WeblabSelfHost.exe.config'
+        # - $dbconfig=GET-SECSecretValue -secretid dbconfig 
+        # - echo $dbconfig.SecretString > C:\ProgramData\AccessData\Shared\DatabaseConfig.xml
+
+        # - !Sub 
+  #         - cmd.exe /c "C:\Program Files\AccessData\Forensic Tools\${Major}.${Minor}\bin\DBConfig.exe" dbtype=${DBType} host=${DBIpAddress} DB_NAME=ADG sysuser=${Sysuser} syspass=${Syspass} appadmin=Administrator apppass="abc123" port=${Port} wordnet=f install=y
+  #         - {
+  #           Major: !Select [0, !Split ['.', !Ref BuildNumber]], 
+  #           Minor: !Select [1, !Split ['.', !Ref BuildNumber]], 
+  #           DBIpAddress: !Ref RDSDatabaseDNS, 
+  #           DBType: !FindInMap [DBType, !Ref DBType, dbtype], 
+  #           Sysuser: "postgres", 
+  #           Syspass: "CQfgQzpCBMif0tiJg9YA",
+  #           Port: !FindInMap [DBType, !Ref DBType, port]
+  #           }
+  #       - Restart-Service -Name QuincSelfHostService
+  # UpdateQuinCDatabaseConfigAIO:
+  #   Condition: AllInOne
+  #   Type: AWS::SSM::Association
+  #   Properties: 
+  #     Targets:
+  #     - Key: InstanceIds
+  #       Values:
+  #         - !Ref CoreInstance
+  #     Name: AWS-RunPowerShellScript
+  #     Parameters: 
+  #       commands: 
+  #       - Stop-Service -Name QuincSelfHostService
+  #       - !Sub 
+  #         - cmd.exe /c "C:\Program Files\AccessData\Forensic Tools\${Major}.${Minor}\bin\DBConfig.exe" dbtype=${DBType} host=${DBIpAddress} DB_NAME=ADG sysuser=${Sysuser} syspass=${Syspass} appadmin=Administrator apppass="abc123" port=${Port} wordnet=f install=y
+  #         - {
+  #           Major: !Select [0, !Split ['.', !Ref BuildNumber]], 
+  #           Minor: !Select [1, !Split ['.', !Ref BuildNumber]], 
+  #           DBIpAddress: !Ref RDSDatabaseDNS, 
+  #           DBType: !FindInMap [DBType, !Ref DBType, dbtype], 
+  #           Sysuser: "postgres", 
+  #           Syspass: "CQfgQzpCBMif0tiJg9YA",
+  #           Port: !FindInMap [DBType, !Ref DBType, port]
+  #           }
+  #       - Restart-Service -Name QuincSelfHostService
+
+  CollabInstance:
+    Condition: Distributed
+    Type: AWS::EC2::Instance
+    Properties:
+      UserData:
+        Fn::Base64: !Sub |
+          <powershell>
+          mkdir C:\Downloads\Amazon\AmazonCloudWatchAgent
+          powershell -Command "(New-Object Net.WebClient).DownloadFile('https://s3.amazonaws.com/amazoncloudwatch-agent/windows/amd64/latest/amazon-cloudwatch-agent.msi','C:\Downloads\Amazon\AmazonCloudWatchAgent\amazon-cloudwatch-agent.msi')"
+          C:\Downloads\Amazon\AmazonCloudWatchAgent\amazon-cloudwatch-agent.msi
+          Start-Sleep -Seconds 10
+          cfn-init.exe --stack ${AWS::StackName} --resource CoreInstance --region ${AWS::Region} --configsets Collab --verbose
+          cfn-signal.exe --exit-code $LASTEXITCODE --stack ${AWS::StackName} --resource CollabInstance --region ${AWS::Region}
+          </powershell>
+      ImageId: !FindInMap [AccountMap, !Ref 'AWS::AccountId', AmiId]
+      # ImageId: !FindInMap [AMIID, !Ref DBType, ami]
+      IamInstanceProfile: ADJoiner
+      InstanceType: !Ref InstanceSize
+      Tags:
+        - Key: Component
+          Value: Collab
+        - Key: Name
+          Value: !Join ["-",[!Ref 'AWS::StackName', "Collab"]]
+        - Key: Owner
+          Value: 1strategy
+      # SecurityGroupIds:
+      #   - !FindInMap [AccountMap, !Ref 'AWS::AccountId', SecurityGroupId]
+      # SubnetId: !FindInMap [AccountMap, !Ref 'AWS::AccountId', SubnetId]
+      NetworkInterfaces: 
+      - AssociatePublicIpAddress: "true"
+        DeviceIndex: "0"
+        GroupSet: 
+          - !FindInMap [AccountMap, !Ref 'AWS::AccountId', SecurityGroupId]
+        SubnetId: !FindInMap [AccountMap, !Ref 'AWS::AccountId', SubnetId]
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 200
+    CreationPolicy:
+      ResourceSignal:    
+        Timeout: PT60M
+
+  UpdateCollabFirewall:
+    Condition: Distributed
+    Type: AWS::SSM::Association
+    Properties: 
+      Targets:
+      - Key: InstanceIds
+        Values:
+          - !Ref CollabInstance
+      Name: AWS-RunPowerShellScript
+      Parameters: 
+        commands: 
+        - netsh advfirewall firewall add rule name="AD-Open Collab port 19876" dir=in action=allow protocol=TCP localport=19876
+  
+  UpdateQuinCConfigToIncludeCollab:
+    Condition: Distributed
+    Type: AWS::SSM::Association
+    Properties: 
+      Targets:
+      - Key: InstanceIds
+        Values:
+          - !Ref QuinCInstance
+      Name: AWS-RunPowerShellScript
+      Parameters: 
+        commands: 
+        - Stop-Service -Name QuincSelfHostService
+        - !Sub
+          - (((Get-Content -path "C:\Program Files\AccessData\Forensic Tools\${Major}.${Minor}\bin\ADG.WeblabSelfHost.exe.config" -Raw) -replace "<add key=`"BreadCollabServiceUrl`" value=`"http://localhost:19876/`"/>","<add key=`"BreadCollabServiceUrl`" value=`"http://${CollabIpAddress}:19876/`"/>")  | Set-Content -path "C:\Program Files\AccessData\Forensic Tools\${Major}.${Minor}\bin\ADG.WeblabSelfHost.exe.config")
+          - { Major: !Select [0, !Split ['.', !Ref BuildNumber]], Minor: !Select [1, !Split ['.', !Ref BuildNumber]], CollabIpAddress: !GetAtt CollabInstance.PrivateIp}
+        - Restart-Service -Name QuincSelfHostService
+
+  DPEInstance:
+    Condition: Distributed
+    Type: AWS::EC2::Instance
+    Properties:
+      UserData:
+        Fn::Base64: !Sub |
+          <powershell>          
+          mkdir C:\Downloads\Amazon\AmazonCloudWatchAgent
+          powershell -Command "(New-Object Net.WebClient).DownloadFile('https://s3.amazonaws.com/amazoncloudwatch-agent/windows/amd64/latest/amazon-cloudwatch-agent.msi','C:\Downloads\Amazon\AmazonCloudWatchAgent\amazon-cloudwatch-agent.msi')"
+          C:\Downloads\Amazon\AmazonCloudWatchAgent\amazon-cloudwatch-agent.msi
+          Start-Sleep -Seconds 10
+          cfn-init.exe --stack ${AWS::StackName} --resource CoreInstance --region ${AWS::Region} --configsets DPE --verbose
+          cfn-signal.exe --exit-code $LASTEXITCODE --stack ${AWS::StackName} --resource DPEInstance --region ${AWS::Region}
+          </powershell>
+      ImageId: !FindInMap [AccountMap, !Ref 'AWS::AccountId', AmiId]
+      # ImageId: !FindInMap [AMIID, !Ref DBType, ami]
+      IamInstanceProfile: ADJoiner
+      InstanceType: !Ref InstanceSize
+      Tags:
+        - Key: Component
+          Value: DPE
+        - Key: Name
+          Value: !Join ["-",[!Ref 'AWS::StackName', "DPE"]]
+        - Key: Owner
+          Value: 1strategy
+      # SubnetId: !FindInMap [AccountMap, !Ref 'AWS::AccountId', SubnetId]
+      # SecurityGroupIds:
+      #   - !FindInMap [AccountMap, !Ref 'AWS::AccountId', SecurityGroupId]
+      NetworkInterfaces: 
+      - AssociatePublicIpAddress: "true"
+        DeviceIndex: "0"
+        GroupSet: 
+          - !FindInMap [AccountMap, !Ref 'AWS::AccountId', SecurityGroupId]
+        SubnetId: !FindInMap [AccountMap, !Ref 'AWS::AccountId', SubnetId]
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 200
+    CreationPolicy:
+      ResourceSignal:    
+        Timeout: PT60M
+
+  UpdateDPEFirewallAndRestartService:
+    Condition: Distributed
+    Type: AWS::SSM::Association
+    Properties: 
+      Targets:
+      - Key: InstanceIds
+        Values:
+          - !Ref DPEInstance
+      Name: AWS-RunPowerShellScript
+      Parameters: 
+        commands: 
+        - netsh advfirewall firewall add rule name="Open dpe port 34097" dir=in action=allow protocol=TCP localport=34097
+        - Start-Service -Name ADProcessingEngine
+
+  UpdateDPMConfig:
+    Condition: Distributed
+    Type: AWS::SSM::Association
+    Properties: 
+      Targets:
+      - Key: InstanceIds
+        Values:
+          - !Ref QuinCInstance
+      Name: AWS-RunPowerShellScript
+      Parameters: 
+        commands: 
+        - !Sub 
+          - | 
+            #### Open 34096
+            netsh advfirewall firewall add rule name="Open incoming dpm port 34096" dir=in action=allow protocol=TCP localport=34096
+
+            #### Update DPM config
+            $key='HKLM:\SYSTEM\CurrentControlSet\Services\ADProcessingManager'
+            $value='ImagePath'
+            $DPMpath=(Get-ItemProperty -Path  $key -Name $value).$value
+            $DPMpath=Split-Path -Path $DPMpath
+            $DPMpath=$DPMpath.Replace("`"","")
+            $filepath=Join-Path $DPMpath ProcessingManager.exe.config
+
+            [xml]$DPMXML = Get-Content $filepath
+            $machinename='${MachineName}'
+            $endpoint='<endpoint address="net.tcp://'+$machinename+':34097/ProcessingEngine" binding="netTcpBinding" bindingConfiguration="TCPBinding" contract="AccessData.EvidenceProcessing.BackendShared.IProcessingEngineService" name="'+$machinename+'" />'
+            Write-Output "Adding $endpoint"
+            
+            ##### Add node
+            $DPMXML.configuration.'system.serviceModel'.client.InnerXml += $endpoint
+            $DPMXML.Save($filepath)
+
+            # #### Remove node
+            # $DPMXML.configuration.'system.serviceModel'.client.InnerXml = $DPMXML.configuration.'system.serviceModel'.client.InnerXml -replace $endpoint,""
+            # $DPMXML.Save($filepath)
+          - {MachineName: !GetAtt DPEInstance.PrivateIp}
+
+
+  # DNSRecord:
+  #   Type: AWS::Route53::RecordSet
+  #   Properties:
+  #     HostedZoneId: Z0283324338T2VK6WR1E8
+  #     Comment: DNS name for my instance.
+  #     Name: !Sub '${AWS::StackName}.${Environment}.qblaze.accessdata.cloud.'
+  #     Type: A
+  #     TTL: '900'
+  #     ResourceRecords:
+  #     - !GetAtt QuinCInstance.PublicIp
+
+Outputs:
+  CoreServer:
+    Condition: AllInOne
+    Description: RDP into this machine
+    Value: !GetAtt CoreInstance.PublicIp
+  AllInOneCloudWatchTestingLogs:
+    Condition: AllInOne
+    Description: View testing logs here
+    Value: !Sub https://console.aws.amazon.com/cloudwatch/home?region=us-east-1#logEventViewer:group=server-bootstrap;stream=${BuildNumber}\${AWS::StackName}\${CoreInstance}\testing.log
+  QuinCServer:
+    Condition: Distributed
+    Description: RDP into this machine
+    Value: !GetAtt QuinCInstance.PublicIp
+  DistributedCloudWatchTestingLogs:
+    Condition: Distributed
+    Description: View testing logs here
+    Value: !Sub https://console.aws.amazon.com/cloudwatch/home?region=us-east-1#logEventViewer:group=server-bootstrap;stream=${BuildNumber}\${AWS::StackName}\${QuinCInstance}\testing.log

@@ -1,0 +1,47 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  InstanceId:
+    Type: String
+  Environment: 
+    Type: String
+    Default: dev
+Resources:
+  QuincBootstrap: 
+    Type: "AWS::SSM::Document"
+    Properties:
+      DocumentType: Command
+      Content: 
+        schemaVersion: '2.2'
+        description: 'quincbootstrap'
+        parameters: {}
+        
+        mainSteps:
+          - action: aws:runPowerShellScript
+            precondition:
+              StringEquals:
+              - platformType
+              - Windows
+            name: quincbootstrap
+            inputs:
+              timeoutSeconds: 240
+              runCommand:
+                - Stop-Service -Name QuincSelfHostService
+                - !Sub 'Read-S3Object -BucketName adg-qb-configstore -Key "${Environment}/ADG.WeblabSelfHost.exe.config" -File "C:\Program Files\AccessData\Forensic Tools\7.3\bin\ADG.WeblabSelfHost.exe.config"'
+                - !Sub '(((Get-Content -path "C:\Program Files\AccessData\Forensic Tools\7.3\bin\ADG.WeblabSelfHost.exe.config" -Raw) -replace "<add key=`"host`" value=`"us-east-appprod1.accessdata.cloud`" />","<add key=`"host`" value=`"${InstanceId}.${Environment}.qblaze.accessdata.cloud`" />")  | Set-Content -path "C:\Program Files\AccessData\Forensic Tools\7.3\bin\ADG.WeblabSelfHost.exe.config")'
+                - !Sub '(((Get-Content -path "C:\Program Files\AccessData\Forensic Tools\7.3\bin\ADG.WeblabSelfHost.exe.config" -Raw) -replace "<add key=`"JobMasterLink`" value=`"https://us-east-appprod1.accessdata.cloud`" />","<add key=`"JobMasterLink`" value=`"https://${InstanceId}.${Environment}.qblaze.accessdata.cloud`" />")  | Set-Content -path "C:\Program Files\AccessData\Forensic Tools\7.3\bin\ADG.WeblabSelfHost.exe.config")'
+                - !Sub 'Read-S3Object -BucketName adg-qb-configstore -Key "${Environment}/DatabaseConfig.xml" -File "C:\ProgramData\AccessData\Shared\DatabaseConfig.xml"'
+                - !Sub 'Read-S3Object -BucketName adg-qb-configstore -Key "${Environment}/accessdata_dot_cloud.pfx" -File "C:\Program Files\AccessData\aaa-ssl-aaa\accessdata_dot_cloud.pfx"'
+                - $user = (Get-SSMParameterValue -Name windows-service-account-user -WithDecryption $True).Parameters[0].Value
+                - $password = (Get-SSMParameterValue -Name windows-service-account-password -WithDecryption $True).Parameters[0].Value
+                - cmd /c sc config "QuincSelfHostService" obj= "$user" password= "$password"
+                - Start-Sleep 10
+                - Restart-Service -Name QuincSelfHostService
+                - Start-Sleep 15
+  SSMAssociation:
+    Type: AWS::SSM::Association
+    Properties: 
+      Targets:
+      - Key: InstanceIds
+        Values:
+          - !Ref InstanceId
+      Name: !Ref QuincBootstrap

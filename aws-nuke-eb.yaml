@@ -1,0 +1,21 @@
+regions:
+- us-east-1
+- us-west-2
+- us-east-2
+- us-west-1
+
+account-blacklist:
+- "999999999999" # production
+
+accounts:
+  "123456789123": # aws-nuke-example
+    filters:
+      IAMUser:
+      - "adsupport"
+      IAMUserPolicyAttachment:
+      - "adsupport -> AdministratorAccess"
+      IAMUserAccessKey:
+      - "adsupport -> AKIAULLNLLLLNLLNLNNL"
+
+
+     #./aws-nuke -c aws-nuke-eb.yaml --no-dry-run --access-key-id AKIAULLNLLLLNLLNLNNL --secret-access-key A1BcdeF2GHIJKlMnopqrSt345uV$wXyzABCDEfg6

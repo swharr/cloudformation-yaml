@@ -1,0 +1,107 @@
+{
+  "Name": "ADG-BlockAPICalls-QBProdStack",
+  "Priority": 6,
+  "Action": {
+    "Block": {}
+  },
+  "VisibilityConfig": {
+    "SampledRequestsEnabled": true,
+    "CloudWatchMetricsEnabled": true,
+    "MetricName": "ADG-BlockAPICalls-QBProdStack"
+  },
+  "Statement": {
+    "ByteMatchStatement": {
+      "FieldToMatch": {
+        "UriPath": {}
+      },
+      "PositionalConstraint": "CONTAINS",
+      "SearchString": ["*/api/getfile",
+                      "*/api/getdrivefile",
+                      "*/api/savedbconfigfile",
+                      "*/api/saveimageFile",
+                      "*/api/appendlogfile",
+                      "*/api/savedbconfigfilenobom",
+                      "*/api/getlogfilecontent/{snippetsize=}",
+                      "*/api/deletefile/{filePath=}",
+                      "*/api/getconfigfile",
+                      "*/api/copymovefile",
+                      "*/api/movefile",
+                      "*/api/movedirectory",
+                      "*/api/makedirectory",
+                      "*/api/deletedirectory",
+                      "*/api/deletefile",
+                      "*/api/saveconfigfile",
+                      "*/api/executesquery",
+                      "*/api/case/createupdateuserarray",
+                      "*/api/case/createupdateuser",
+                      "*/api/case/{caseid=caseid}/getdefaultprocessingoption",
+                      "*/api/case/passwordreset/{userid=userid}",
+                      "*/api/case/updatepassword/{userid=userid}",
+                      "*/api/case/deleteuser/{userid=userid}",
+                      "*/api/case/deleteusers",
+                      "*/api/case/{caseid=caseid}/createsummationindexsettingdata",
+                      "*/api/case/{caseid=caseid}/savecasesearchfolderassigmentoption",
+                      "*/api/case/{caseId=caseId}/updatecasefields",
+                      "*/api/cases/{caseId}/savealertemailaddress",
+                      "*/api/cases/{caseId}/getalertemailaddress",
+                      "*/api/user/removeimpersonate",
+                      "*/api/user/isuserimpersonating",
+                      "*/api/user/impersonate",
+                      "*/api/case/getsetting",
+                      "*/api/case/getallsetting",
+                      "*/api/case/getusersetting/",
+                      "*/api/case/{caseId=}/getusersetting/{userId=}/{key=}",
+                      "*/api/case/saveusersetting",
+                      "*/api/cases/{caseId}/getsettingdata/{key=key}",
+                      "*/api/savecommonprocessoroptions",
+                      "*/api/getcommonsearchalerts",
+                      "*/api/case/validatecasepath",
+                      "*/api/getinitialdump",
+                      "*/api/getsimplecaseinfo",
+                      "*/api/deletecase/",
+                      "*/api/case/getcaseandpermissions",
+                      "*/api/updaterole",
+                      "*/api/getcasesforuser",
+                      "*/api/getusersforcase",
+                      "*/api/getpermissionlistforuser",
+                      "*/api/case/createrole",
+                      "*/api/creategroup",
+                      "*/api/creategroupwithsecId",
+                      "*/api/updategroup",
+                      "*/api/deletegroup",
+                      "*/api/deleterole",
+                      "*/api/case/updateglobalpermissions",
+                      "*/api/getallsecurityinfo",
+                      "*/api/getallsecurityinfoforcase",
+                      "*/api/case/overwriteglobalpermissions",
+                      "*/api/overwritecasepermissions",
+                      "*/api/case/manageglobalpermissions",
+                      "*/api/case/managemanycasepermissions",
+                      "*/api/managecasepermissions",
+                      "*/api/case/setpermissionforcaseroles",
+                      "*/api/case/removepermissionforcaseroles",
+                      "*/api/getgroups",
+                      "*/api/getallroles",
+                      "*/api/getusersforgroup",
+                      "*/api/getgroupsbyadminrole",
+                      "*/api/case/getusersforcaserole",
+                      "*/api/getgroupsforcase",
+                      "*/api/adduuidindex",
+                      "*/api/security/resetuserpasswords",
+                      "*/api/getdbconfigfile",
+                      "*/api/createsubadmin",
+                      "*/api/createguest"
+                      ],
+      "TextTransformations": [
+        {
+          "Type": "CMD_LINE",
+          "Priority": 0
+        },
+        {
+          "Type": "URL_DECODE",
+          "Priority": 1
+        }
+      ]
+    }
+  }
+}
